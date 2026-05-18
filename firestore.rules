@@ -1,0 +1,25 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global cache is read-only for everyone to check for existing reports
+    match /global_cache/{hash} {
+      allow read: if true;
+      allow write: if false; // Only written via secure server-side API
+    }
+
+    // User reports: only accessible by the owner
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      match /reports/{reportId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

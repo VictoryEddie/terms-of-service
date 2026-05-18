@@ -1,0 +1,163 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# ============================================
+# DEPENDENCIES
+# ============================================
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# ============================================
+# NEXT.JS BUILD OUTPUT
+# ============================================
+/.next/
+/out/
+/build
+
+# ============================================
+# ENVIRONMENT VARIABLES (CRITICAL!)
+# ============================================
+# Never commit these - they contain secrets!
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Allow .env.example (template without secrets)
+!.env.example
+
+# ============================================
+# FIREBASE (CRITICAL!)
+# ============================================
+# Service account keys - NEVER commit these!
+*-firebase-adminsdk-*.json
+serviceAccountKey.json
+firebase-debug.log
+firebaseServiceAccount.json
+
+# Firebase cache
+.firebase/
+
+# ============================================
+# TYPESCRIPT
+# ============================================
+*.tsbuildinfo
+next-env.d.ts
+
+# ============================================
+# TESTING
+# ============================================
+/coverage
+*.lcov
+.nyc_output
+
+# ============================================
+# LOGS & DEBUG
+# ============================================
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# ============================================
+# OS FILES
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================
+# EDITOR & IDE
+# ============================================
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ============================================
+# AI ASSISTANTS & AGENTS
+# ============================================
+.gemini/
+.cursor/
+.continue/
+CLAUDE.md
+AGENTS.md
+
+# ============================================
+# TEMPORARY & SCRATCH FILES
+# ============================================
+scratch/
+temp/
+tmp/
+*.tmp
+*.bak
+*.swp
+*.diff
+*.patch
+lint_output*.txt
+overview.txt
+
+# ============================================
+# DEPLOYMENT
+# ============================================
+.vercel
+.netlify
+
+# ============================================
+# CERTIFICATES & KEYS (CRITICAL!)
+# ============================================
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
+
+# ============================================
+# SENTRY
+# ============================================
+.sentryclirc
+sentry.properties
+
+# ============================================
+# REDIS & UPSTASH
+# ============================================
+dump.rdb
+
+# ============================================
+# DOCUMENTATION (OPTIONAL)
+# ============================================
+# Uncomment if you don't want to commit audit docs
+# ALL_FIXES_SUMMARY.md
+# CRITICAL_FIXES_APPLIED.md
+# HIGH_PRIORITY_FIXES_APPLIED.md
+# PROJECT_CLEANUP_GUIDE.md

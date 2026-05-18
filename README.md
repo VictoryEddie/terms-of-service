@@ -29,6 +29,15 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Environment Variables
+
+Before deploying, make sure to add all environment variables from `.env.example` to your deployment platform (Vercel, Railway, etc.).
+
+Required variables:
+- Firebase configuration (6 variables)
+- GROQ_API_KEY
+- Upstash Redis credentials (2 variables)
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.

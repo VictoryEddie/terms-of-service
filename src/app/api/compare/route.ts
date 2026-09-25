@@ -197,7 +197,7 @@ export async function POST(req: Request) {
           });
 
           if (!response.ok) {
-            let errorData: any = {};
+            let errorData: { error?: { message?: string } } = {};
             try {
               errorData = await response.json();
             } catch {}

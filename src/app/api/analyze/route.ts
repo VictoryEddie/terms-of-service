@@ -170,6 +170,22 @@ const analyzeRequestSchema = z
     message: "Either 'text' or 'url' must be provided",
   });
 
+// Type definitions for AI responses
+interface ChunkAnalysisResult {
+  risks?: Array<{ title: string; description: string; severity: string; quote: string }>;
+  goodPoints?: Array<{ title: string; description: string }>;
+}
+
+interface FullAnalysisResult extends ChunkAnalysisResult {
+  isTermsOfService?: boolean;
+  appName?: string;
+  transparencyScore?: number;
+  grade?: string;
+  summary?: string;
+  jurisdiction?: string;
+  smokingGun?: { title: string; description: string; clause: string };
+}
+
 export async function POST(req: Request) {
   // Rate limiting check - use multiple headers for better IP detection
   const forwardedFor = req.headers.get("x-forwarded-for");
@@ -404,7 +420,7 @@ export async function POST(req: Request) {
           });
 
           if (!response.ok) {
-            let errorData: any = {};
+            let errorData: { error?: { message?: string } } = {};
             try {
               errorData = await response.json();
             } catch {}
@@ -485,7 +501,10 @@ export async function POST(req: Request) {
       }
     }
 
-    async function callWithLockIn(prompt: string, stage: string): Promise<any> {
+    async function callWithLockIn(
+      prompt: string,
+      stage: string,
+    ): Promise<ChunkAnalysisResult | FullAnalysisResult | null> {
       while (providerIndex < providers.length) {
         const provider = providers[providerIndex];
         try {
@@ -548,7 +567,7 @@ export async function POST(req: Request) {
         chunkCount: chunks.length,
         interChunkDelayMs: `${MIN_CHUNK_DELAY_MS}-${MIN_CHUNK_DELAY_MS + JITTER_DELAY_MS}`,
       });
-      const partialResults = [];
+      const partialResults: ChunkAnalysisResult[] = [];
 
       for (let i = 0; i < chunks.length; i++) {
         const prompt = `Analyze this SECTION (${i + 1}/${chunks.length}) of a Terms of Service document. Extract all risks and good points.

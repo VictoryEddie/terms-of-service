@@ -33,7 +33,6 @@ interface MemoryRateLimitEntry {
 function createMemoryFallbackLimit(
   windowLimit: number,
   windowMs: number,
-  label: string,
 ): {
   limit: (identifier: string) => Promise<RateLimitResult>;
 } {
@@ -98,11 +97,7 @@ function wrapWithFallback(
 ): {
   limit: (identifier: string) => Promise<RateLimitResult>;
 } {
-  const memoryFallback = createMemoryFallbackLimit(
-    windowLimit,
-    windowMs,
-    label,
-  );
+  const memoryFallback = createMemoryFallbackLimit(windowLimit, windowMs);
   let degradedMode = false;
   let degradedUntil = 0;
   const DEGRADE_DURATION_MS = 60 * 1000;

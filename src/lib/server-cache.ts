@@ -1,5 +1,6 @@
 import { LRUCache } from "lru-cache";
 import { redis } from "./redis";
+import type { Risk, GoodPoint, SmokingGun } from "@/types/analysis";
 
 // Define proper type for cached values
 export interface CachedAnalysisResult {
@@ -8,16 +9,16 @@ export interface CachedAnalysisResult {
   transparencyScore?: number;
   grade?: string;
   summary: string;
-  risks: unknown[];
-  goodPoints: unknown[];
+  risks: Risk[];
+  goodPoints: GoodPoint[];
   timeSavedMinutes?: number;
-  smokingGun?: unknown;
+  smokingGun?: SmokingGun | null;
   jurisdiction?: string;
   contentHash?: string;
   previousVersionId?: string | null;
   analysisSource?: "link" | "text";
   sourceUrl?: string | null;
-  [key: string]: unknown; // Allow additional properties
+  cachedAt?: unknown;
 }
 
 // High-speed in-memory cache for the server (L1)

@@ -5,18 +5,19 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { AnalysisResult } from "@/types/analysis";
+import { logger, hashIp } from "@/lib/logging";
 
 export async function saveReport(userId: string, result: AnalysisResult) {
   try {
-    console.log("Saving report for user:", userId);
+    logger.debug("Saving report for user", { userIdHash: hashIp(userId) });
     const docRef = await addDoc(collection(db, "users", userId, "reports"), {
       ...result,
       createdAt: serverTimestamp(),
     });
-    console.log("Report saved successfully with ID:", docRef.id);
+    logger.info("Report saved successfully", { docId: docRef.id });
     return docRef.id;
   } catch (error) {
-    console.error("CRITICAL FIREBASE ERROR:", error);
+    logger.error("CRITICAL FIREBASE ERROR in saveReport:", error);
     throw error;
   }
 }

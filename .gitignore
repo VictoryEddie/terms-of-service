@@ -18,17 +18,16 @@
 /.next/
 /out/
 /build
+/dist
+/.turbopack/
+/.turbo/
 
 # ============================================
 # ENVIRONMENT VARIABLES (CRITICAL!)
 # ============================================
 # Never commit these - they contain secrets!
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Allow .env.example (template without secrets)
+.env
+.env.*
 !.env.example
 
 # ============================================
@@ -39,6 +38,13 @@
 serviceAccountKey.json
 firebase-debug.log
 firebaseServiceAccount.json
+firebase-service-account.json
+*.service-account.json
+service-account.json
+*serviceAccount*.json
+*adminsdk*.json
+gcp-creds.json
+application_default_credentials.json
 
 # Firebase cache
 .firebase/
@@ -48,6 +54,22 @@ firebaseServiceAccount.json
 # ============================================
 *.tsbuildinfo
 next-env.d.ts
+
+# Lint/format caches
+.eslintcache
+.prettiercache
+.stylelintcache
+
+# ============================================
+# GRAPHIFY (auto-generated — run 'graphify update' to regenerate)
+# ============================================
+graphify-out/
+
+# ============================================
+# TRAE IDE / WORKSPACE STATE
+# ============================================
+.trae/
+.trae*
 
 # ============================================
 # TESTING

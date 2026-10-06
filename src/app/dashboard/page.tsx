@@ -27,6 +27,8 @@ import { AnalysisResult } from "@/types/analysis";
 import { ReportCard } from "@/components/ReportCard";
 import { cn } from "@/lib/utils";
 
+import { DeleteConfirmModal } from "@/components/DeleteConfirmModal";
+
 export default function Dashboard() {
   const { user } = useAuth();
   const [reports, setReports] = useState<(AnalysisResult & { id: string })[]>(
@@ -38,6 +40,9 @@ export default function Dashboard() {
   const [selectedReport, setSelectedReport] = useState<
     (AnalysisResult & { id: string }) | null
   >(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [reportToDelete, setReportToDelete] = useState<{ id: string; appName: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -77,19 +82,24 @@ export default function Dashboard() {
   }, [selectedReport]);
 
   const handleDelete = async (id: string) => {
-    if (
-      !user ||
-      !confirm(
-        "Are you sure you want to delete this analysis from your Legal Vault?"
-      )
-    )
-      return;
+    if (!user) return;
+    
+    setIsDeleting(true);
     try {
       await deleteDoc(doc(db, "users", user.uid, "reports", id));
       setSelectedReport(null);
+      setDeleteModalOpen(false);
+      setReportToDelete(null);
     } catch (error) {
       console.error("Delete failed:", error);
+    } finally {
+      setIsDeleting(false);
     }
+  };
+
+  const openDeleteModal = (id: string, appName: string) => {
+    setReportToDelete({ id, appName });
+    setDeleteModalOpen(true);
   };
 
   // Memoize stats calculation to avoid recalculating on every render
@@ -358,7 +368,7 @@ export default function Dashboard() {
                 {/* Delete Action */}
                 <div className="flex justify-center pt-10 pb-20">
                   <button
-                    onClick={() => handleDelete(selectedReport.id)}
+                    onClick={() => openDeleteModal(selectedReport.id, selectedReport.appName || "this analysis")}
                     className="flex items-center gap-2 px-8 py-4 rounded-2xl bg-destructive/10 border border-destructive/20 text-destructive hover:bg-destructive hover:text-white transition-all text-sm font-black uppercase tracking-widest"
                   >
                     <Trash2 className="w-5 h-5" />
@@ -370,6 +380,18 @@ export default function Dashboard() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={deleteModalOpen}
+        onClose={() => {
+          setDeleteModalOpen(false);
+          setReportToDelete(null);
+        }}
+        onConfirm={() => reportToDelete && handleDelete(reportToDelete.id)}
+        appName={reportToDelete?.appName || ""}
+        isDeleting={isDeleting}
+      />
     </main>
   );
 }

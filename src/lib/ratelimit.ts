@@ -152,6 +152,21 @@ export const analyzeRateLimit =
       )
     : createNoopLimit();
 
+export const deepAnalyzeRateLimit =
+  hasCredentials && redis
+    ? wrapWithFallback(
+        new Ratelimit({
+          redis: redis,
+          limiter: Ratelimit.slidingWindow(2, "1 h"),
+          analytics: true,
+          prefix: "@upstash/ratelimit/deep-analyze",
+        }),
+        2,
+        HOUR_MS,
+        "deepAnalyzeRateLimit",
+      )
+    : createNoopLimit();
+
 export const compareRateLimit =
   hasCredentials && redis
     ? wrapWithFallback(

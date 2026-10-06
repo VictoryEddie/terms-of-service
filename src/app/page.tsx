@@ -35,6 +35,7 @@ export default function Home() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
+  const [deepAnalysis, setDeepAnalysis] = useState(false);
 
   const [object, setObject] = useState<AnalysisResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -103,7 +104,8 @@ export default function Home() {
       level: "info",
       extra: {
         source: input.startsWith("http") ? "url" : "text",
-        inputLength: input.length
+        inputLength: input.length,
+        deepAnalysis: deepAnalysis,
       }
     });
 
@@ -116,16 +118,27 @@ export default function Home() {
     setFullSourceText(input);
     
     try {
-      setTimeout(() => setLoadingStage("Detecting Clause Patterns..."), 3000);
-      setTimeout(() => setLoadingStage("Running AI Risk Assessment..."), 7000);
-      setTimeout(() => setLoadingStage("Finalizing Analysis Report..."), 12000);
+      if (deepAnalysis) {
+        setTimeout(() => setLoadingStage("Pass 1/6: Data Privacy & Tracking..."), 3000);
+        setTimeout(() => setLoadingStage("Pass 2/6: Liability & Indemnification..."), 20000);
+        setTimeout(() => setLoadingStage("Pass 3/6: User Rights & Account Control..."), 40000);
+        setTimeout(() => setLoadingStage("Pass 4/6: Payment & Subscription Terms..."), 60000);
+        setTimeout(() => setLoadingStage("Pass 5/6: Content Ownership & Licensing..."), 80000);
+        setTimeout(() => setLoadingStage("Pass 6/6: Dispute Resolution..."), 100000);
+        setTimeout(() => setLoadingStage("Synthesizing Comprehensive Report..."), 120000);
+      } else {
+        setTimeout(() => setLoadingStage("Detecting Clause Patterns..."), 3000);
+        setTimeout(() => setLoadingStage("Running AI Risk Assessment..."), 7000);
+        setTimeout(() => setLoadingStage("Finalizing Analysis Report..."), 12000);
+      }
 
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...(input.startsWith("http") ? { url: input } : { text: input }),
-          force
+          force,
+          deepAnalysis: deepAnalysis,
         }),
       });
 
@@ -282,16 +295,62 @@ export default function Home() {
                       onChange={(e) => setInput(e.target.value)}
                     />
                   </div>
+                  
+                  {/* Deep Analysis Toggle */}
+                  <div className="flex items-center gap-3 px-2">
+                    <label htmlFor="deep-analysis-toggle" className="flex items-center gap-3 cursor-pointer group/label">
+                      <div className="relative">
+                        <input
+                          type="checkbox"
+                          id="deep-analysis-toggle"
+                          checked={deepAnalysis}
+                          onChange={(e) => setDeepAnalysis(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-foreground/10 rounded-full peer-checked:bg-primary transition-all duration-300"></div>
+                        <div className="absolute left-1 top-1 w-4 h-4 bg-white dark:bg-black rounded-full transition-all duration-300 peer-checked:translate-x-5"></div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-foreground group-hover/label:text-primary transition-colors">
+                            🔬 Deep Analysis Mode
+                          </span>
+                          {deepAnalysis && (
+                            <span className="text-xs font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {deepAnalysis 
+                            ? "6 specialized legal passes • 2-5 minutes • Comprehensive coverage" 
+                            : "Quick scan • ~30 seconds • General risk detection"}
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => handleAnalyze(false)}
                     disabled={!input.trim() || isLoading}
-                    className="w-full relative group/btn overflow-hidden rounded-2xl bg-foreground text-background dark:bg-white dark:text-black font-black py-5 flex items-center justify-center gap-3 transition-all hover:shadow-[0_0_30px_rgba(255,255,255,0.1)]"
+                    className={cn(
+                      "w-full relative group/btn overflow-hidden rounded-2xl font-black py-5 flex items-center justify-center gap-3 transition-all",
+                      deepAnalysis
+                        ? "bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:shadow-[0_0_30px_rgba(139,92,246,0.3)]"
+                        : "bg-foreground text-background dark:bg-white dark:text-black hover:shadow-[0_0_30px_rgba(255,255,255,0.1)]"
+                    )}
                   >
-                    <div className="absolute inset-0 bg-gradient-to-r from-primary to-secondary opacity-0 group-hover/btn:opacity-100 transition-opacity duration-500" />
+                    {!deepAnalysis && (
+                      <div className="absolute inset-0 bg-gradient-to-r from-primary to-secondary opacity-0 group-hover/btn:opacity-100 transition-opacity duration-500" />
+                    )}
                     <span className="relative z-10 text-lg">
-                      {isLoading ? "Processing Request..." : "Start AI Analysis"}
+                      {isLoading 
+                        ? "Processing Request..." 
+                        : deepAnalysis 
+                        ? "Start Deep Analysis 🔬" 
+                        : "Start AI Analysis"}
                     </span>
                     {!isLoading && <ArrowRight className="relative z-10 w-6 h-6 group-hover/btn:translate-x-1 transition-transform" />}
                   </motion.button>

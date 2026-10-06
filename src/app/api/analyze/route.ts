@@ -2,7 +2,7 @@ import { db } from "@/lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
 import { serverCache, type CachedAnalysisResult } from "@/lib/server-cache";
 import { getAdminFirestore } from "@/lib/firebase-admin";
-import { chunkText } from "@/lib/utils";
+import { chunkText, createOverlappingChunks } from "@/lib/utils";
 import { logger, hashIp } from "@/lib/logging";
 import crypto from "crypto";
 import dns from "dns";
@@ -10,7 +10,7 @@ import { promisify } from "util";
 import { AnalysisResult, Risk, GoodPoint, SmokingGun } from "@/types/analysis";
 import { z } from "zod";
 
-import { analyzeRateLimit } from "@/lib/ratelimit";
+import { analyzeRateLimit, deepAnalyzeRateLimit } from "@/lib/ratelimit";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
@@ -165,6 +165,7 @@ const analyzeRequestSchema = z
     text: z.string().optional(),
     url: z.string().url().optional(),
     force: z.boolean().optional(),
+    deepAnalysis: z.boolean().optional(),
   })
   .refine((data) => data.text || data.url, {
     message: "Either 'text' or 'url' must be provided",
@@ -202,14 +203,26 @@ export async function POST(req: Request) {
   // Never log or persist plaintext IPs (PII / GDPR). Hash with salt for pseudonymization.
   const rateLimitKey = hashIp(rawIp);
 
-  const { success, limit, reset, remaining } =
-    await analyzeRateLimit.limit(rateLimitKey);
+  // Check if this is a deep analysis request first to determine rate limit
+  let isDeepAnalysisRequest = false;
+  try {
+    const body = await req.clone().json();
+    isDeepAnalysisRequest = body.deepAnalysis === true;
+  } catch {
+    // If body parsing fails, default to quick analysis rate limit
+  }
+
+  // Apply appropriate rate limit based on analysis mode
+  const rateLimit = isDeepAnalysisRequest ? deepAnalyzeRateLimit : analyzeRateLimit;
+  const { success, limit, reset, remaining } = await rateLimit.limit(rateLimitKey);
 
   if (!success) {
-    logger.warn("Rate limit exceeded for requester", { rateLimitKey });
+    logger.warn("Rate limit exceeded for requester", { rateLimitKey, mode: isDeepAnalysisRequest ? 'deep' : 'quick' });
     return new Response(
       JSON.stringify({
-        error: "Too many requests. You can perform 5 analyses per hour.",
+        error: isDeepAnalysisRequest 
+          ? "Too many requests. You can perform 2 deep analyses per hour."
+          : "Too many requests. You can perform 5 analyses per hour.",
         retryAfter: reset,
       }),
       {
@@ -242,7 +255,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { text, url, force } = validationResult.data;
+    const { text, url, force, deepAnalysis } = validationResult.data;
     let contentToAnalyze = text || "";
 
     if (url) {
@@ -341,21 +354,12 @@ export async function POST(req: Request) {
     };
 
     // All 4 models below verified LIVE and free-tier eligible on 2026-09-25:
-    // 1. Gemini 3.5 Flash-Lite  — Google AI Studio free, 30 RPM / 1500 RPD (per docs)
-    //    Google explicitly recommends 3.x Flash-Lite over 2.5 Flash for new projects
-    //    because 2.5 Flash access is being restricted to historical active users only.
-    // 2. Groq GPT-OSS 120B     — Groq free tier: 30 RPM / 1000 RPD, 250K TPM
-    // 3. Groq GPT-OSS 20B      — Groq free tier: 30 RPM / 1000 RPD, 200K tokens/day
+    // 1. Groq GPT-OSS 120B     — Groq free tier: 30 RPM / 1000 RPD, 250K TPM (PRIMARY)
+    // 2. Groq GPT-OSS 20B      — Groq free tier: 30 RPM / 1000 RPD, 200K tokens/day
+    // 3. Mistral Small 4       — Mistral Experiment free tier: ~1 RPS, 262K ctx
+    // 4. Gemini 3.5 Flash-Lite — Google AI Studio free, 30 RPM / 1500 RPD
     //    (Llama 3.1/3.3 are GROQ ENTERPRISE-ONLY as of 2026-08-16, NEVER using them again)
-    // 4. Mistral Small 4       — Mistral Experiment free tier: ~1 RPS, 262K ctx
     const providers: ProviderConfig[] = [
-      {
-        name: "Gemini",
-        baseUrl:
-          "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        apiKeyEnv: "GEMINI_API_KEY",
-        model: "gemini-3.5-flash-lite",
-      },
       {
         name: "Groq-120B",
         baseUrl: "https://api.groq.com/openai/v1/chat/completions",
@@ -374,19 +378,30 @@ export async function POST(req: Request) {
         apiKeyEnv: "MISTRAL_API_KEY",
         model: "mistral-small-4",
       },
+      {
+        name: "Gemini",
+        baseUrl:
+          "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        apiKeyEnv: "GEMINI_API_KEY",
+        model: "gemini-3.5-flash-lite",
+      },
     ];
 
     async function callProvider(provider: ProviderConfig, prompt: string) {
       const apiKey = process.env[provider.apiKeyEnv];
-      if (!apiKey)
+      if (!apiKey) {
+        logger.warn(`${provider.apiKeyEnv} is missing in environment variables.`);
         throw new Error(
           `${provider.apiKeyEnv} is missing in environment variables.`,
         );
+      }
 
       const delay = (ms: number) => new Promise((res) => setTimeout(res, ms));
       logger.debug("AI: attempting model", {
         provider: provider.name,
         model: provider.model,
+        hasApiKey: !!apiKey,
+        apiKeyPrefix: apiKey.substring(0, 10) + '...',
       });
 
       const maxRetries = 1;
@@ -417,6 +432,17 @@ export async function POST(req: Request) {
             method: "POST",
             headers,
             body: JSON.stringify(body),
+            signal: AbortSignal.timeout(45000), // 45 second timeout per request (increased for deep analysis)
+          }).catch((fetchError) => {
+            // Handle network-level errors (DNS, timeout, connection refused, etc.)
+            logger.error("Network fetch error", {
+              provider: provider.name,
+              baseUrl: provider.baseUrl,
+              error: fetchError.message,
+              code: fetchError.code,
+              name: fetchError.name,
+            });
+            throw new Error(`Network error for ${provider.name}: ${fetchError.message}`);
           });
 
           if (!response.ok) {
@@ -470,6 +496,16 @@ export async function POST(req: Request) {
             throw new Error("Failed to parse AI response as valid JSON.");
           }
         } catch (err: unknown) {
+          const error = err as Error & { cause?: Error; code?: string };
+          logger.error("Provider call attempt failed", {
+            provider: provider.name,
+            model: provider.model,
+            retryAttempt: retries,
+            errorMessage: error.message,
+            errorCode: error.code,
+            errorCause: error.cause?.message,
+            errorStack: error.stack?.split('\n')[0], // First line only
+          });
           if (retries < maxRetries) continue;
           throw err;
         }
@@ -479,7 +515,6 @@ export async function POST(req: Request) {
       );
     }
 
-    const chunks = chunkText(contentToAnalyze);
     let finalObject: AnalysisResult | null = null;
 
     // Pick the first available provider at run start and stick with it.
@@ -540,6 +575,234 @@ export async function POST(req: Request) {
     // to avoid hitting any free-tier per-second/burst rate limits.
     const MIN_CHUNK_DELAY_MS = 750;
     const JITTER_DELAY_MS = 500;
+
+    // DEEP ANALYSIS MODE: Multi-pass analysis with 6 specialized passes
+    if (deepAnalysis) {
+      logger.info("Starting DEEP ANALYSIS mode with 6-pass system", {
+        contentLength: contentToAnalyze.length,
+        wordCount: contentToAnalyze.split(/\s+/).length,
+      });
+
+      const deepAnalysisPasses = [
+        {
+          name: "Data Privacy & Tracking",
+          prompt: (text: string) => `You are a privacy law expert. Analyze ONLY data collection, storage, sharing, and user privacy rights in this Terms of Service.
+
+Focus on:
+- Personal data collected
+- Third-party sharing
+- Tracking technologies
+- Data retention periods
+- Right to deletion/access
+- GDPR/CCPA compliance gaps
+
+Flag any ambiguous data usage clauses, unlimited retention periods, or broad third-party sharing.
+
+Text: ${text}
+
+JSON Schema:
+{
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`,
+        },
+        {
+          name: "Liability & Indemnification",
+          prompt: (text: string) => `You are a contract lawyer. Analyze ONLY liability limitations, warranties, and indemnification in this Terms of Service.
+
+Focus on:
+- Company liability caps
+- "As-is" disclaimers
+- User indemnification clauses
+- Warranty exclusions
+- Force majeure abuse
+
+Flag any clauses where users bear unreasonable legal or financial risk for company actions.
+
+Text: ${text}
+
+JSON Schema:
+{
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`,
+        },
+        {
+          name: "User Rights & Account Control",
+          prompt: (text: string) => `You are a consumer rights advocate. Analyze ONLY account control, termination rights, and user recourse in this Terms of Service.
+
+Focus on:
+- Account termination policies
+- Content deletion rights
+- Service changes without notice
+- Right to appeal/dispute
+- Unilateral modifications
+
+Flag any unilateral power imbalances favoring the company.
+
+Text: ${text}
+
+JSON Schema:
+{
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`,
+        },
+        {
+          name: "Payment & Subscription Terms",
+          prompt: (text: string) => `You are a financial compliance auditor. Analyze ONLY payment, billing, refunds, and subscriptions in this Terms of Service.
+
+Focus on:
+- Auto-renewal policies
+- Refund policies
+- Price change notifications
+- Cancellation difficulty
+- Hidden fees
+
+Flag any predatory billing practices, unclear cancellation terms, or no-refund policies.
+
+Text: ${text}
+
+JSON Schema:
+{
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`,
+        },
+        {
+          name: "Content Ownership & Licensing",
+          prompt: (text: string) => `You are an intellectual property lawyer. Analyze ONLY content ownership, licensing, and usage rights in this Terms of Service.
+
+Focus on:
+- User-generated content ownership
+- License grants to company
+- Sublicensing to third parties
+- Copyright/IP disputes
+- Perpetual licenses
+
+Flag any perpetual licenses, broad sublicensing rights, or content ownership transfers.
+
+Text: ${text}
+
+JSON Schema:
+{
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`,
+        },
+        {
+          name: "Dispute Resolution & Jurisdiction",
+          prompt: (text: string) => `You are a litigation attorney. Analyze ONLY dispute resolution, arbitration, governing law, and legal recourse in this Terms of Service.
+
+Focus on:
+- Forced arbitration clauses
+- Class action waivers
+- Jurisdiction requirements
+- Legal fee responsibility
+- Statute of limitations
+
+Flag any forced arbitration, class action bans, or inconvenient jurisdictions.
+
+Text: ${text}
+
+JSON Schema:
+{
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`,
+        },
+      ];
+
+      // Create overlapping chunks for long documents
+      const deepChunks = createOverlappingChunks(contentToAnalyze, 3000, 200);
+      const allPassResults: ChunkAnalysisResult[] = [];
+
+      // For each chunk, run all 6 passes
+      for (let chunkIdx = 0; chunkIdx < deepChunks.length; chunkIdx++) {
+        const chunk = deepChunks[chunkIdx];
+        const chunkLabel = deepChunks.length > 1 ? ` (Chunk ${chunkIdx + 1}/${deepChunks.length})` : "";
+
+        for (let passIdx = 0; passIdx < deepAnalysisPasses.length; passIdx++) {
+          const pass = deepAnalysisPasses[passIdx];
+          const passLabel = `Pass ${passIdx + 1}/6: ${pass.name}${chunkLabel}`;
+
+          logger.info(`Deep Analysis - ${passLabel}`, {
+            provider: providers[providerIndex].name,
+          });
+
+          const passResult = await callWithLockIn(pass.prompt(chunk), passLabel);
+          if (passResult) {
+            allPassResults.push(passResult);
+            logger.info(`${passLabel} COMPLETE`, {
+              risks: passResult.risks?.length || 0,
+              goodPoints: passResult.goodPoints?.length || 0,
+            });
+          } else {
+            logger.warn(`${passLabel} FAILED - skipping`, { chunkIdx, passIdx });
+          }
+
+          // Throttle between passes
+          if (passIdx < deepAnalysisPasses.length - 1 || chunkIdx < deepChunks.length - 1) {
+            const waitMs = MIN_CHUNK_DELAY_MS + Math.floor(Math.random() * (JITTER_DELAY_MS + 1));
+            await new Promise((res) => setTimeout(res, waitMs));
+          }
+        }
+      }
+
+      // Synthesis: Merge and deduplicate all pass results
+      if (allPassResults.length === 0) {
+        logger.error("Deep Analysis failed - no passes completed successfully", {
+          chunksAttempted: deepChunks.length,
+          passesAttempted: deepAnalysisPasses.length,
+        });
+        throw new Error(
+          "Deep analysis could not complete any passes. This may be due to API rate limits or network issues. Please try again in a few minutes, or use Quick Analysis mode."
+        );
+      }
+
+      logger.info("Deep Analysis passes complete, starting synthesis", {
+        successfulPasses: allPassResults.length,
+        expectedPasses: deepChunks.length * deepAnalysisPasses.length,
+      });
+
+      const synthesisPrompt = `I have analyzed a Terms of Service document through 6 specialized legal passes (Data Privacy, Liability, User Rights, Payment, Content Ownership, Dispute Resolution).
+
+Here are all the extracted risks and good points from all passes:
+
+${JSON.stringify(allPassResults)}
+
+Your task:
+1. Synthesize these into one comprehensive master report
+2. Remove duplicate or near-duplicate findings
+3. If the same clause was flagged by multiple passes, increase its severity
+4. Select the most critical "Smoking Gun" clause
+5. Provide a final grade (A-F) and executive summary
+
+JSON Schema:
+{
+  "isTermsOfService": true,
+  "appName": string,
+  "transparencyScore": number,
+  "grade": "A"|"B"|"C"|"D"|"F",
+  "summary": string,
+  "jurisdiction": string,
+  "smokingGun": { "title": string, "description": string, "clause": string },
+  "risks": [{ "title": string, "description": string, "severity": "high"|"medium"|"low", "quote": string }],
+  "goodPoints": [{ "title": string, "description": string }]
+}`;
+
+      finalObject = (await callWithLockIn(synthesisPrompt, "Deep Synthesis")) as AnalysisResult | null;
+
+      if (finalObject) {
+        logger.info("Deep Analysis COMPLETE", {
+          passesRun: allPassResults.length,
+          totalRisks: finalObject.risks?.length || 0,
+          grade: finalObject.grade,
+        });
+      }
+    } else {
+      // QUICK ANALYSIS MODE (existing logic)
+      const chunks = chunkText(contentToAnalyze);
 
     if (chunks.length === 1) {
       const prompt = `Critically analyze these Terms of Service. Provide a full and detailed audit.
@@ -630,6 +893,7 @@ export async function POST(req: Request) {
         "Synthesis",
       )) as AnalysisResult | null;
     }
+    } // End of QUICK ANALYSIS MODE (else block)
 
     if (!finalObject) {
       throw new Error("Analysis failed to generate a result.");

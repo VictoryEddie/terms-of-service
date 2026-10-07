@@ -1,5 +1,6 @@
 import { db } from "@/lib/firebase";
 import { doc, getDoc } from "firebase/firestore";
+import { getAdminFirestore } from "@/lib/firebase-admin";
 import { compareRateLimit } from "@/lib/ratelimit";
 import { logger, hashIp } from "@/lib/logging";
 import { z } from "zod";
@@ -104,18 +105,36 @@ export async function POST(req: Request) {
 
     const { currentHash, previousHash } = validationResult.data;
 
-    // 1. Fetch both versions from the Global Cache
-    const [currentSnap, previousSnap] = await Promise.all([
-      getDoc(doc(db, "global_cache", currentHash)),
-      getDoc(doc(db, "global_cache", previousHash)),
-    ]);
+    // 1. Fetch both versions from the Global Cache (Server-Side Admin SDK first)
+    let currentData: Record<string, unknown> | undefined;
+    let previousData: Record<string, unknown> | undefined;
 
-    if (!currentSnap.exists() || !previousSnap.exists()) {
-      throw new Error("One or both versions could not be found in the cache.");
+    const adminFs = getAdminFirestore();
+    if (adminFs) {
+      const [currSnap, prevSnap] = await Promise.all([
+        adminFs.collection("global_cache").doc(currentHash).get(),
+        adminFs.collection("global_cache").doc(previousHash).get(),
+      ]);
+
+      if (!currSnap.exists || !prevSnap.exists) {
+        throw new Error("One or both versions could not be found in the cache.");
+      }
+
+      currentData = currSnap.data() as Record<string, unknown>;
+      previousData = prevSnap.data() as Record<string, unknown>;
+    } else {
+      const [currentSnap, previousSnap] = await Promise.all([
+        getDoc(doc(db, "global_cache", currentHash)),
+        getDoc(doc(db, "global_cache", previousHash)),
+      ]);
+
+      if (!currentSnap.exists() || !previousSnap.exists()) {
+        throw new Error("One or both versions could not be found in the cache.");
+      }
+
+      currentData = currentSnap.data() as Record<string, unknown>;
+      previousData = previousSnap.data() as Record<string, unknown>;
     }
-
-    const currentData = currentSnap.data();
-    const previousData = previousSnap.data();
 
     // 2. AI COMPARISON (Multi-provider fallback: FREE-TIER LOCK-IN, 2026-09-25 VERIFIED)
     //    Provider lock-in: try providers in order, only advance after 2 consecutive failures.
@@ -125,6 +144,7 @@ export async function POST(req: Request) {
       baseUrl: string;
       apiKeyEnv: string;
       model: string;
+      extraHeaders?: Record<string, string>;
     };
 
     const providers: ProviderConfig[] = [
@@ -148,10 +168,20 @@ export async function POST(req: Request) {
         model: "openai/gpt-oss-20b",
       },
       {
-        name: "Mistral",
-        baseUrl: "https://api.mistral.ai/v1/chat/completions",
-        apiKeyEnv: "MISTRAL_API_KEY",
-        model: "mistral-small-4",
+        name: "OpenRouter",
+        baseUrl: "https://openrouter.ai/api/v1/chat/completions",
+        apiKeyEnv: "OPENROUTER_API_KEY",
+        model: "meta-llama/llama-3.3-70b-instruct:free",
+        extraHeaders: {
+          "HTTP-Referer": "https://tos-analyser.vercel.app",
+          "X-Title": "Terms Of Service Risk Analyzer",
+        },
+      },
+      {
+        name: "Cohere",
+        baseUrl: "https://api.cohere.ai/compatibility/v1/chat/completions",
+        apiKeyEnv: "COHERE_API_KEY",
+        model: "command-r",
       },
     ];
 
@@ -174,6 +204,7 @@ export async function POST(req: Request) {
           const headers: Record<string, string> = {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
+            ...(provider.extraHeaders || {}),
           };
 
           const body = {

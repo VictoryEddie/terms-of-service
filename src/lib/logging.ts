@@ -2,6 +2,8 @@ import crypto from "crypto";
 
 const SECRET_PATTERNS: Array<{ name: string; pattern: RegExp }> = [
   { name: "GROQ_API_KEY", pattern: /gsk_[A-Za-z0-9_\-]{20,}/g },
+  { name: "OPENROUTER_API_KEY", pattern: /sk-or-v1-[A-Za-z0-9_\-]{20,}/g },
+  { name: "COHERE_API_KEY", pattern: /(?:cohere)?[A-Za-z0-9_\-]{30,}/gi },
   { name: "UPSTASH_TOKEN", pattern: /UPSTASH_REDIS_REST_TOKEN[=:]\s*[A-Za-z0-9_\-]{10,}/g },
   { name: "FIREBASE_API_KEY", pattern: /AIza[A-Za-z0-9_\-]{25,}/g },
   { name: "FIREBASE_PRIVATE_KEY", pattern: /-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/g },

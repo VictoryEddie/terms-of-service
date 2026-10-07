@@ -203,14 +203,24 @@ export async function POST(req: Request) {
   // Never log or persist plaintext IPs (PII / GDPR). Hash with salt for pseudonymization.
   const rateLimitKey = hashIp(rawIp);
 
-  // Check if this is a deep analysis request first to determine rate limit
-  let isDeepAnalysisRequest = false;
+  // Parse request body once safely for rate limit check and payload validation
+  let body: unknown;
   try {
-    const body = await req.clone().json();
-    isDeepAnalysisRequest = body.deepAnalysis === true;
+    body = await req.json();
   } catch {
-    // If body parsing fails, default to quick analysis rate limit
+    return new Response(
+      JSON.stringify({ error: "Invalid JSON in request body" }),
+      {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
   }
+
+  const isDeepAnalysisRequest =
+    typeof body === "object" &&
+    body !== null &&
+    (body as Record<string, unknown>).deepAnalysis === true;
 
   // Apply appropriate rate limit based on analysis mode
   const rateLimit = isDeepAnalysisRequest ? deepAnalyzeRateLimit : analyzeRateLimit;
@@ -238,8 +248,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Validate request body
-    const body = await req.json();
+    // Validate parsed request body
     const validationResult = analyzeRequestSchema.safeParse(body);
 
     if (!validationResult.success) {
@@ -310,25 +319,34 @@ export async function POST(req: Request) {
           headers: { "Content-Type": "application/json" },
         });
 
-      // 2. FIRESTORE CHECK (Read-only)
-      const cacheRef = doc(db, "global_cache", contentHash);
+      // 2. FIRESTORE CHECK (Server-Side Admin SDK for zero-latency, reliable reads)
       try {
-        const cachedDoc = (await Promise.race([
-          getDoc(cacheRef),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("Timeout")), 2000),
-          ),
-        ])) as Awaited<ReturnType<typeof getDoc>>;
-
-        if (cachedDoc && cachedDoc.exists()) {
-          const data = cachedDoc.data();
-          // Type assertion: Firestore data matches CachedAnalysisResult structure
-          const cachedResult = data as CachedAnalysisResult;
-          serverCache.set(contentHash, cachedResult);
-          return new Response(
-            JSON.stringify({ ...cachedResult, isCached: true }),
-            { headers: { "Content-Type": "application/json" } },
-          );
+        const adminFs = getAdminFirestore();
+        if (adminFs) {
+          const docSnap = await adminFs.collection("global_cache").doc(contentHash).get();
+          if (docSnap.exists) {
+            const data = docSnap.data();
+            const cachedResult = data as CachedAnalysisResult;
+            await serverCache.set(contentHash, cachedResult);
+            logger.info("L3 (Firestore) server-side cache HIT", { contentHash });
+            return new Response(
+              JSON.stringify({ ...cachedResult, isCached: true }),
+              { headers: { "Content-Type": "application/json" } },
+            );
+          }
+        } else {
+          // Fallback to client SDK only if Admin SDK credentials are not configured
+          const cacheRef = doc(db, "global_cache", contentHash);
+          const cachedDoc = await getDoc(cacheRef);
+          if (cachedDoc && cachedDoc.exists()) {
+            const data = cachedDoc.data();
+            const cachedResult = data as CachedAnalysisResult;
+            await serverCache.set(contentHash, cachedResult);
+            return new Response(
+              JSON.stringify({ ...cachedResult, isCached: true }),
+              { headers: { "Content-Type": "application/json" } },
+            );
+          }
         }
       } catch (error) {
         logger.warn(
@@ -353,13 +371,19 @@ export async function POST(req: Request) {
       extraBody?: Record<string, unknown>;
     };
 
-    // All 4 models below verified LIVE and free-tier eligible on 2026-09-25:
-    // 1. Groq GPT-OSS 120B     — Groq free tier: 30 RPM / 1000 RPD, 250K TPM (PRIMARY)
-    // 2. Groq GPT-OSS 20B      — Groq free tier: 30 RPM / 1000 RPD, 200K tokens/day
-    // 3. Mistral Small 4       — Mistral Experiment free tier: ~1 RPS, 262K ctx
-    // 4. Gemini 3.5 Flash-Lite — Google AI Studio free, 30 RPM / 1500 RPD
-    //    (Llama 3.1/3.3 are GROQ ENTERPRISE-ONLY as of 2026-08-16, NEVER using them again)
+    // Verified resilient multi-tier LLM fallback hierarchy:
+    // 1. Gemini (Primary)       — High throughput, 1M context, reliable free tier
+    // 2. Groq-120B & 20B        — Fast secondary inference
+    // 3. OpenRouter             — Multi-provider free open-weight fallback (Llama 3.3 70B)
+    // 4. Cohere                 — Legal/document analysis trial tier (Command-R)
     const providers: ProviderConfig[] = [
+      {
+        name: "Gemini",
+        baseUrl:
+          "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        apiKeyEnv: "GEMINI_API_KEY",
+        model: "gemini-3.5-flash-lite",
+      },
       {
         name: "Groq-120B",
         baseUrl: "https://api.groq.com/openai/v1/chat/completions",
@@ -373,17 +397,20 @@ export async function POST(req: Request) {
         model: "openai/gpt-oss-20b",
       },
       {
-        name: "Mistral",
-        baseUrl: "https://api.mistral.ai/v1/chat/completions",
-        apiKeyEnv: "MISTRAL_API_KEY",
-        model: "mistral-small-4",
+        name: "OpenRouter",
+        baseUrl: "https://openrouter.ai/api/v1/chat/completions",
+        apiKeyEnv: "OPENROUTER_API_KEY",
+        model: "meta-llama/llama-3.3-70b-instruct:free",
+        extraHeaders: {
+          "HTTP-Referer": "https://tos-analyser.vercel.app",
+          "X-Title": "Terms Of Service Risk Analyzer",
+        },
       },
       {
-        name: "Gemini",
-        baseUrl:
-          "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        apiKeyEnv: "GEMINI_API_KEY",
-        model: "gemini-3.5-flash-lite",
+        name: "Cohere",
+        baseUrl: "https://api.cohere.ai/compatibility/v1/chat/completions",
+        apiKeyEnv: "COHERE_API_KEY",
+        model: "command-r",
       },
     ];
 
@@ -460,7 +487,12 @@ export async function POST(req: Request) {
             });
 
             if (status === 429 && retries < maxRetries) {
-              const waitTime = 10000;
+              let waitTime = 10000;
+              const msg = errorData.error?.message || "";
+              const match = msg.match(/try again in ([\d\.]+)s/i);
+              if (match && match[1]) {
+                waitTime = Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 500, 15000);
+              }
               logger.info("AI provider quota hit, retrying once", {
                 provider: provider.name,
                 model: provider.model,
